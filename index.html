@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Productivity JABIL DR</title>
     <!-- Google Fonts: Inter para un look moderno -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -36,9 +36,15 @@
                 <button class="nav-btn" data-target="paradas-view"><i class="fa-solid fa-stopwatch"></i> Paradas</button>
                 <button class="nav-btn" data-target="historial-view"><i class="fa-solid fa-clock-rotate-left"></i> Historial</button>
                 <button class="nav-btn" data-target="actions-view"><i class="fa-solid fa-bolt-lightning"></i> 4Q Acciones Eng</button>
+                <button class="nav-btn" data-target="analisis-view"><i class="fa-solid fa-magnifying-glass-chart"></i> Análisis WIP</button>
                 <button class="nav-btn" data-target="tecnicos-view">
                     <i class="fa-solid fa-users-gear"></i> Gestionar Técnicos
                 </button>
+                <div style="margin-top: 20px;">
+                    <button onclick="forceTVMode()" class="nav-btn" style="width: 100%; background: rgba(139, 92, 246, 0.2); color: #c4b5fd; border: 1px solid rgba(139, 92, 246, 0.3);">
+                        <i class="fa-solid fa-tv"></i> Iniciar Modo TV
+                    </button>
+                </div>
             </nav>
 
             <div class="sidebar-footer">
@@ -270,9 +276,23 @@
                                 <label>Técnico que Reporta:</label>
                                 <select id="downtime-tech-select" required></select>
                             </div>
+                            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:15px; margin-bottom:15px;">
+                                <div class="form-group" style="margin-bottom:0;">
+                                    <label>Hora Inicio:</label>
+                                    <input type="time" id="downtime-start" required style="width: 100%; background: rgba(0,0,0,0.2); border: 1px solid var(--glass-border); color: #fff; padding: 12px; border-radius: var(--radius-md);">
+                                </div>
+                                <div class="form-group" style="margin-bottom:0;">
+                                    <label>Hora Fin:</label>
+                                    <input type="time" id="downtime-end" style="width: 100%; background: rgba(0,0,0,0.2); border: 1px solid var(--glass-border); color: #fff; padding: 12px; border-radius: var(--radius-md);">
+                                    <small style="font-size:0.7rem; color:var(--text-muted);">Dejar vacío si sigue abierta</small>
+                                </div>
+                            </div>
                             <div class="form-group">
-                                <label>Duración (Minutos):</label>
-                                <input type="number" id="downtime-minutes" min="1" placeholder="Ej: 15" required style="width: 100%; background: rgba(0,0,0,0.2); border: 1px solid var(--glass-border); color: #fff; padding: 12px; border-radius: var(--radius-md);">
+                                <label>Estado:</label>
+                                <select id="downtime-status" required style="width: 100%; background: rgba(0,0,0,0.2); border: 1px solid var(--glass-border); color: #fff; padding: 12px; border-radius: var(--radius-md);">
+                                    <option value="Cerrada">Cerrada</option>
+                                    <option value="Abierta">Abierta</option>
+                                </select>
                             </div>
                             <div class="form-group">
                                 <label>Causa / Motivo:</label>
@@ -308,7 +328,7 @@
                                     <tr>
                                         <th>Hora</th>
                                         <th>Técnico</th>
-                                        <th>Duración</th>
+                                        <th>Tiempo (Min / Hrs)</th>
                                         <th>Causa</th>
                                         <th>Comentario</th>
                                         <th>Acción</th>
@@ -342,13 +362,17 @@
                                 <label>Hasta</label>
                                 <input type="date" id="hist-date-end" style="width:100%; background:rgba(0,0,0,0.2); border:1px solid var(--glass-border); color:#fff; padding:10px; border-radius:var(--radius-md);">
                             </div>
+                            <div class="form-group" style="margin:0; flex:1; min-width:150px;">
+                                <label>Buscar Serial</label>
+                                <input type="text" id="hist-serial-search" placeholder="Ej: SN12345..." style="width:100%; background:rgba(0,0,0,0.2); border:1px solid var(--glass-border); color:#fff; padding:10px; border-radius:var(--radius-md);">
+                            </div>
                             <button onclick="renderHistorial()" class="btn-primary" style="margin:0; width:auto; padding:10px 20px;">
                                 <i class="fa-solid fa-filter"></i> Filtrar
                             </button>
                         </div>
                         <div class="table-container">
                             <table class="productivity-table">
-                                 <thead><tr><th>Fecha</th><th>Técnico</th><th>Hora Reg.</th><th>Serial</th><th>Efic. Hora</th><th>Comentario</th></tr></thead>
+                                 <thead><tr><th>Fecha</th><th>Técnico</th><th>Hora Reg.</th><th>Serial</th><th>Efic. Hora</th><th>Comentario</th><th>Acción</th></tr></thead>
                                 <tbody id="historial-body">
                                     <tr><td colspan="5" style="text-align:center; color:var(--text-muted);">Cargando...</td></tr>
                                 </tbody>
@@ -533,7 +557,7 @@
                                         </select>
                                     </div>
                                 </div>
-                                <button type="submit" class="btn-primary" style="width:100%;"><i class="fa-solid fa-save"></i> Guardar Acción</button>
+                                <button type="submit" id="btn-save-action" class="btn-primary" style="width:100%;"><i class="fa-solid fa-save"></i> Guardar Acción</button>
                             </form>
                         </div>
 
@@ -558,10 +582,63 @@
                                         <th>Acción</th>
                                         <th>Responsable</th>
                                         <th>Estado</th>
-                                        <th>Borrar</th>
+                                        <th>Acciones</th>
                                     </tr>
                                 </thead>
                                 <tbody id="actions-table-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- VISTA: ANALISIS WIP -->
+                <section id="analisis-view" class="view">
+                    <div class="glass-panel" style="padding: 30px;">
+                        <h2><i class="fa-solid fa-magnifying-glass-chart" style="color:#0ea5e9; margin-right:10px;"></i>Análisis de Variación WIP</h2>
+                        <p class="panel-desc">Sube los reportes WIP de dos semanas diferentes para comparar y ver qué ensambles entraron y cuáles salieron.</p>
+                        
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px;">
+                            <div style="background: rgba(0,0,0,0.2); border: 1px dashed var(--glass-border); padding: 20px; border-radius: var(--radius-md); text-align: center;">
+                                <h4>WIP Semana Anterior</h4>
+                                <input type="file" id="wip-old-input" accept=".xls,.xlsx" style="display:none;">
+                                <label for="wip-old-input" class="btn-primary" style="margin: 15px auto 5px auto; width: fit-content; padding: 10px 20px; cursor: pointer; display: inline-block;">
+                                    <i class="fa-solid fa-file-excel"></i> Subir Excel Anterior
+                                </label>
+                                <div id="wip-old-status" style="font-size: 0.8rem; color: var(--text-muted);">Ningún archivo</div>
+                            </div>
+                            
+                            <div style="background: rgba(0,0,0,0.2); border: 1px dashed var(--glass-border); padding: 20px; border-radius: var(--radius-md); text-align: center;">
+                                <h4>WIP Semana Actual</h4>
+                                <input type="file" id="wip-new-input" accept=".xls,.xlsx" style="display:none;">
+                                <label for="wip-new-input" class="btn-primary" style="background:#10b981; margin: 15px auto 5px auto; width: fit-content; padding: 10px 20px; cursor: pointer; display: inline-block;">
+                                    <i class="fa-solid fa-file-excel"></i> Subir Excel Actual
+                                </label>
+                                <div id="wip-new-status" style="font-size: 0.8rem; color: var(--text-muted);">Ningún archivo</div>
+                            </div>
+                        </div>
+                        
+                        <button id="btn-compare-wip" class="btn-primary" style="width: 100%; margin-top: 20px; padding: 15px; font-size: 1.1rem; background: linear-gradient(135deg, #0ea5e9, #3b82f6);">
+                            <i class="fa-solid fa-code-compare"></i> Comparar WIP
+                        </button>
+                    </div>
+
+                    <div id="wip-comparison-results" class="glass-panel" style="margin-top: 20px; padding: 25px; display: none;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                            <h3 style="margin:0;"><i class="fa-solid fa-list-check" style="color:var(--text-muted); margin-right:10px;"></i>Resultado de la Comparación</h3>
+                            <div id="wip-comp-summary" style="font-size: 0.9rem; font-weight: bold;"></div>
+                        </div>
+                        <div class="table-container">
+                            <table class="productivity-table">
+                                <thead>
+                                    <tr>
+                                        <th>Assembly Number</th>
+                                        <th>Entraron (+)</th>
+                                        <th>Salieron (-)</th>
+                                        <th>Variación Neta</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="wip-comp-body">
+                                </tbody>
                             </table>
                         </div>
                     </div>
@@ -626,6 +703,48 @@
         window.db = firebase.database();
         console.log("✅ Firebase conectado a JB DASHBOARD");
     </script>
+
+    <!-- TV MODE OVERLAY -->
+    <div id="tv-mode-overlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:#0f172a; z-index:9999; flex-direction:column; align-items:center; justify-content:center; padding:40px; overflow:hidden;">
+        <h1 id="tv-slide-title" style="color:#fff; font-size:4rem; margin-bottom:5px; text-transform:uppercase; letter-spacing:4px; font-weight:900; text-shadow: 0 0 20px rgba(139, 92, 246, 0.5); text-align:center;">Productividad en Vivo</h1>
+        <h3 style="color:#a78bfa; font-size:1.8rem; margin-bottom:40px; font-weight:400; letter-spacing:2px;" id="tv-time-display">00:00:00</h3>
+        
+        <!-- Contenedor Principal de Slides -->
+        <div style="position:relative; width:100%; max-width:1000px; height: 500px; display:flex; justify-content:center;">
+            
+            <!-- SLIDE 0: LEADERBOARD -->
+            <div id="tv-slide-0" class="tv-slide" style="position:absolute; width:100%; display:flex; flex-direction:column; gap:20px; opacity:1; transition: opacity 0.5s;">
+                <div id="tv-leaderboard" style="display:flex; flex-direction:column; gap:15px; width:100%;"></div>
+            </div>
+
+            <!-- SLIDE 1: PARADAS ACTIVAS -->
+            <div id="tv-slide-1" class="tv-slide" style="position:absolute; width:100%; display:none; flex-direction:column; gap:20px; opacity:0; transition: opacity 0.5s;">
+                <div id="tv-paradas-content" style="display:grid; grid-template-columns:1fr 1fr; gap:20px; width:100%;"></div>
+            </div>
+
+            <!-- SLIDE 2: TOP WIP -->
+            <div id="tv-slide-2" class="tv-slide" style="position:absolute; width:100%; display:none; flex-direction:column; gap:20px; opacity:0; transition: opacity 0.5s;">
+                <div id="tv-wip-content" style="display:flex; flex-direction:column; gap:15px; width:100%;"></div>
+            </div>
+
+            <!-- SLIDE 3: ACCIONES 4Q -->
+            <div id="tv-slide-3" class="tv-slide" style="position:absolute; width:100%; display:none; flex-direction:column; gap:20px; opacity:0; transition: opacity 0.5s;">
+                <div id="tv-acciones-content" style="display:grid; grid-template-columns:1fr 1fr; gap:20px; width:100%;"></div>
+            </div>
+
+        </div>
+
+        <!-- Dots -->
+        <div style="display:flex; gap:15px; margin-top:30px;" id="tv-dots">
+            <div class="tv-dot" style="width:15px; height:15px; border-radius:50%; background:#8b5cf6; transition:0.3s;" id="dot-0"></div>
+            <div class="tv-dot" style="width:15px; height:15px; border-radius:50%; background:rgba(255,255,255,0.2); transition:0.3s;" id="dot-1"></div>
+            <div class="tv-dot" style="width:15px; height:15px; border-radius:50%; background:rgba(255,255,255,0.2); transition:0.3s;" id="dot-2"></div>
+            <div class="tv-dot" style="width:15px; height:15px; border-radius:50%; background:rgba(255,255,255,0.2); transition:0.3s;" id="dot-3"></div>
+        </div>
+
+        <div style="position:absolute; bottom:20px; font-size:1rem; color:rgba(255,255,255,0.3); letter-spacing:1px;">Toca cualquier parte de la pantalla para salir</div>
+    </div>
+
     <script src="app.js"></script>
 </body>
 </html>

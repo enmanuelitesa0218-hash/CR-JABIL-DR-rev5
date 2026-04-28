@@ -2,6 +2,13 @@
 // Productivity JABIL DR - FIREBASE REALTIME
 // ==========================================
 
+// Funciones de utilidad
+function getLocalDayStr() {
+    const d = new Date();
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+    return d.toISOString().split('T')[0];
+}
+
 const globalHours = [
     "07:00 - 08:00", "08:00 - 09:00", "09:00 - 10:00", "10:00 - 11:00",
     "11:00 - 12:00", "12:00 - 13:00", "13:00 - 14:00", "14:00 - 15:00",
@@ -76,7 +83,7 @@ function setupFirebaseListeners() {
 
                     let entries;
                     if (hourData && typeof hourData === 'object' && !Array.isArray(hourData)) {
-                        entries = Object.values(hourData);
+                        entries = Object.keys(hourData).map(k => ({ ...hourData[k], pushKey: k, originalHourKey: rawHourKey }));
                     } else {
                         entries = Array.isArray(hourData) ? hourData : [];
                     }
@@ -92,6 +99,7 @@ function setupFirebaseListeners() {
         updateKPIs();
         updateTotalGlobal();
         updateSyncStatus(true);
+        if (typeof renderTVLeaderboard === 'function') renderTVLeaderboard();
     }, (error) => {
         console.error("Error leyendo productividad:", error);
         updateSyncStatus(false);
@@ -243,7 +251,7 @@ function updateSyncStatus(online) {
 // KPIs
 // ------------------------------------------
 function updateKPIs() {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getLocalDayStr();
     const monthPrefix = today.substring(0, 7);
     const now = new Date();
 
@@ -380,6 +388,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initAdmin();
     initHistorial();
     initActions();
+    initWipComparison();
 
     // Poblar inicial con caché si existe
     const cached = localStorage.getItem('jabil_techs_list');
@@ -404,7 +413,7 @@ function updateDateDisplay() {
 function updateDate() {
     updateDateDisplay();
 
-    const nowStr = new Date().toISOString().split('T')[0];
+    const nowStr = getLocalDayStr();
     const s = document.getElementById('filter-date-start');
     const e = document.getElementById('filter-date-end');
     if (s && !s.value) s.value = nowStr;
@@ -413,7 +422,7 @@ function updateDate() {
     [s, e].forEach(el => {
         if (el) el.addEventListener('change', () => {
             // Si el usuario cambia la fecha manualmente, marcar que ya no es "Auto Today"
-            const nowStr = new Date().toISOString().split('T')[0];
+            const nowStr = getLocalDayStr();
             if (el.value !== nowStr) el.dataset.isAutoToday = "false";
             else el.dataset.isAutoToday = "true";
 
@@ -427,7 +436,7 @@ function updateDate() {
 
     // Verificación de cambio de día (reset a medianoche)
     setInterval(() => {
-        const nowStr = new Date().toISOString().split('T')[0];
+        const nowStr = getLocalDayStr();
         const s = document.getElementById('filter-date-start');
         const e = document.getElementById('filter-date-end');
         
@@ -603,12 +612,14 @@ function initForm() {
         paradaForm.onsubmit = async (e) => {
             e.preventDefault();
             const tid = document.getElementById('downtime-tech-select').value;
-            const mins = document.getElementById('downtime-minutes').value;
+            const startTime = document.getElementById('downtime-start').value;
+            const endTime = document.getElementById('downtime-end').value;
+            const status = document.getElementById('downtime-status').value;
             const cause = document.getElementById('downtime-cause').value;
             const comment = document.getElementById('downtime-comment').value;
 
             if (!tid) { alert("Selecciona un técnico"); return; }
-            await submitDowntime(tid, mins, cause, comment);
+            await submitDowntime(tid, startTime, endTime, cause, comment, status);
             paradaForm.reset();
             renderDowntimeTable();
         };
@@ -685,7 +696,7 @@ function autoDetectHour() {
 }
 
 async function submitEntry(techId, serials) {
-    const day = new Date().toISOString().split('T')[0];
+    const day = getLocalDayStr();
     const hour = autoDetectHour();
     const ts = new Date().toLocaleTimeString('es-DO', { hour12: false }).substring(0, 5);
     const comment = document.getElementById('entry-comment')?.value || "";
@@ -706,15 +717,29 @@ async function submitEntry(techId, serials) {
     showSuccessToast();
 }
 
-async function submitDowntime(techId, minutes, cause, comment) {
-    const day = new Date().toISOString().split('T')[0];
+async function submitDowntime(techId, startTime, endTime, cause, comment, status) {
+    const day = getLocalDayStr();
     const hour = autoDetectHour();
     const ts = new Date().toLocaleTimeString('es-DO', { hour12: false }).substring(0, 5);
     const safeHour = hour.replace(/:/g, '-').replace(/ /g, '_');
 
+    let minutes = 0;
+    if (status === 'Cerrada' && startTime && endTime) {
+        const [sh, sm] = startTime.split(':').map(Number);
+        const [eh, em] = endTime.split(':').map(Number);
+        let diff = (eh * 60 + em) - (sh * 60 + sm);
+        if (diff < 0) diff += 24 * 60; // cruce de medianoche
+        minutes = diff;
+    } else if (status === 'Abierta') {
+        minutes = 'En curso';
+    }
+
     const entry = {
         techId,
         minutes,
+        startTime,
+        endTime,
+        status,
         cause,
         comment,
         timestamp: ts
@@ -724,6 +749,26 @@ async function submitDowntime(techId, minutes, cause, comment) {
         await window.db.ref(`downtime/${day}/${safeHour}`).push(entry);
     }
     showToast("Parada registrada correctamente", "success");
+}
+
+window.closeDowntimeEntry = async function(day, hourKey, pushKey, startTime) {
+    const endTime = prompt("Hora de fin (HH:MM):", new Date().toLocaleTimeString('es-DO', {hour12:false}).substring(0,5));
+    if(!endTime) return;
+    
+    const [sh, sm] = startTime.split(':').map(Number);
+    const [eh, em] = endTime.split(':').map(Number);
+    let diff = (eh * 60 + em) - (sh * 60 + sm);
+    if (diff < 0) diff += 24 * 60;
+    
+    if(window.db) {
+        await window.db.ref(`downtime/${day}/${hourKey}/${pushKey}`).update({
+            endTime: endTime,
+            status: 'Cerrada',
+            minutes: diff
+        });
+        showToast("Parada cerrada", "success");
+        renderDowntimeTable();
+    }
 }
 
 function showToast(msg, type = 'success') {
@@ -862,7 +907,7 @@ function renderDowntimeChart() {
     const canvas = document.getElementById('downtimeChart');
     if (!canvas) return;
     
-    const day = document.getElementById('filter-date-start')?.value || new Date().toISOString().split('T')[0];
+    const day = document.getElementById('filter-date-start')?.value || getLocalDayStr();
     const dayData = downtimeData[day] || {};
     
     const labels = [];
@@ -1043,7 +1088,7 @@ function renderDowntimeTable() {
     const body = document.getElementById('downtime-table-body');
     if (!body) return;
 
-    const day = new Date().toISOString().split('T')[0];
+    const day = getLocalDayStr();
     const dayData = downtimeData[day] || {};
     const rows = [];
 
@@ -1058,10 +1103,14 @@ function renderDowntimeTable() {
             rows.push(`<tr>
                 <td style="font-family:monospace; font-weight:600;">${entry.timestamp || '--:--'} <small style="opacity:0.6">(${hourDisplay})</small></td>
                 <td><strong>${techName}</strong></td>
-                <td><span style="color:#ef4444; font-weight:700;">${entry.minutes} min</span></td>
+                <td>
+                    <span style="color:#ef4444; font-weight:700;">${entry.minutes}${entry.minutes !== 'En curso' ? ' min' : ''}</span><br>
+                    <small style="opacity:0.8;">${entry.startTime || '--:--'} - ${entry.endTime || '--:--'}</small>
+                </td>
                 <td><span style="background:rgba(239, 68, 68, 0.1); color:#ef4444; padding:2px 8px; border-radius:4px; font-size:0.8rem; font-weight:600;">${entry.cause}</span></td>
                 <td style="max-width:200px; overflow:hidden; text-overflow:ellipsis; font-size:0.85rem; font-style:italic;">${entry.comment || '-'}</td>
-                <td>
+                <td style="text-align:center;">
+                    ${entry.status === 'Abierta' ? `<button onclick="closeDowntimeEntry('${day}', '${hourKey}', '${pushKey}', '${entry.startTime}')" class="nav-btn btn-primary" style="padding:5px 10px; margin:0 5px 0 0;"><i class="fa-solid fa-check"></i></button>` : ''}
                     <button onclick="deleteDowntimeEntry('${day}', '${hourKey}', '${pushKey}')" class="nav-btn btn-danger" style="padding:5px 10px; margin:0;"><i class="fa-solid fa-trash"></i></button>
                 </td>
             </tr>`);
@@ -1329,7 +1378,7 @@ function exportToExcel() {
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = `reporte_detallado_jabil_${new Date().toISOString().split('T')[0]}.csv`;
+    link.download = `reporte_detallado_jabil_${getLocalDayStr()}.csv`;
     link.click();
 }
 
@@ -1344,6 +1393,7 @@ function renderHistorial() {
     const filterTech = document.getElementById('hist-tech-filter')?.value || '';
     const filterStart = document.getElementById('hist-date-start')?.value || '';
     const filterEnd = document.getElementById('hist-date-end')?.value || '';
+    const filterSerial = document.getElementById('hist-serial-search')?.value.toLowerCase().trim() || '';
 
     const rows = [];
     let grandTotal = 0;
@@ -1375,6 +1425,9 @@ function renderHistorial() {
                 }
 
                 items.forEach(entry => {
+                    const entrySerial = entry.serial || 'Manual';
+                    if (filterSerial && !entrySerial.toLowerCase().includes(filterSerial)) return;
+                    
                     grandTotal++;
                     rows.push(`<tr>
                         <td>${day}</td>
@@ -1383,6 +1436,9 @@ function renderHistorial() {
                         <td><span style="background:rgba(99,102,241,0.2); padding:3px 10px; border-radius:20px; font-weight:700;">${entry.serial || 'Manual'}</span></td>
                         <td style="color:${effColor}; font-weight:700;">${effText}</td>
                         <td style="font-size:0.8rem; font-style:italic; max-width:200px; overflow:hidden; text-overflow:ellipsis;">${entry.comment || '-'}</td>
+                        <td style="text-align:center;">
+                            ${entry.pushKey ? `<button onclick="deleteProductivityEntry('${day}', '${techId}', '${entry.originalHourKey || hourKey}', '${entry.pushKey}')" class="nav-btn btn-danger" style="padding:5px 10px; margin:0;"><i class="fa-solid fa-trash"></i></button>` : `<small style="color:var(--text-muted); font-size:0.7rem;">Sin ID</small>`}
+                        </td>
                     </tr>`);
                 });
             });
@@ -1397,22 +1453,37 @@ function renderHistorial() {
 }
 
 function initHistorial() {
-    const nowStr = new Date().toISOString().split('T')[0];
+    const nowStr = getLocalDayStr();
     const s = document.getElementById('hist-date-start');
     const e = document.getElementById('hist-date-end');
     const t = document.getElementById('hist-tech-filter');
+    const searchInp = document.getElementById('hist-serial-search');
     
-    // Default: último mes
-    const monthAgo = new Date();
-    monthAgo.setMonth(monthAgo.getMonth() - 1);
-    if (s) s.value = monthAgo.toISOString().split('T')[0];
+    // Default: Hoy
+    if (s) s.value = nowStr;
     if (e) e.value = nowStr;
 
     // Agregar listeners para refrescar al cambiar
     [s, e, t].forEach(el => {
         if (el) el.addEventListener('change', renderHistorial);
     });
+    if (searchInp) {
+        searchInp.addEventListener('input', renderHistorial);
+    }
 }
+
+window.deleteProductivityEntry = function(day, techId, hourKey, pushKey) {
+    window.showAdminAuthModal(async () => {
+        if (!window.db) return;
+        try {
+            await window.db.ref(`productivity/${day}/${techId}/${hourKey}/${pushKey}`).remove();
+            showToast("Entrada eliminada con éxito", "success");
+        } catch (error) {
+            console.error("Error al borrar la entrada:", error);
+            alert("Error al borrar: " + error.message);
+        }
+    });
+};
 
 // ------------------------------------------
 // ACCIONES 4Q D&R
@@ -1429,12 +1500,22 @@ function initActions() {
                 desc: document.getElementById('action-desc').value,
                 owner: document.getElementById('action-owner').value,
                 status: document.getElementById('action-status').value,
-                timestamp: Date.now()
+                timestamp: window.editActionId ? undefined : Date.now()
             };
 
             if (window.db) {
-                await window.db.ref('actions').push(action);
-                showToast("Acción guardada correctamente", "success");
+                if (window.editActionId) {
+                    const existing = engineerActions.find(a => a.pushKey === window.editActionId);
+                    action.timestamp = existing.timestamp; // keep original
+                    action.date = existing.date; // keep original date
+                    await window.db.ref('actions/' + window.editActionId).update(action);
+                    window.editActionId = null;
+                    document.getElementById('btn-save-action').innerHTML = '<i class="fa-solid fa-save"></i> Guardar Acción';
+                    showToast("Acción actualizada correctamente", "success");
+                } else {
+                    await window.db.ref('actions').push(action);
+                    showToast("Acción guardada correctamente", "success");
+                }
                 form.reset();
             } else {
                 alert("Sin conexión a Firebase");
@@ -1461,11 +1542,25 @@ function renderActionsTable() {
                 </span>
             </td>
             <td>
+                <button onclick="editAction('${a.pushKey}')" class="nav-btn btn-primary" style="padding:5px 10px; margin:0 5px 0 0;"><i class="fa-solid fa-pen"></i></button>
                 <button onclick="deleteAction('${a.pushKey}')" class="nav-btn btn-danger" style="padding:5px 10px; margin:0;"><i class="fa-solid fa-trash"></i></button>
             </td>
         </tr>
     `).join('');
 }
+
+window.editAction = function(key) {
+    const a = engineerActions.find(x => x.pushKey === key);
+    if(!a) return;
+    window.editActionId = key;
+    document.getElementById('action-area').value = a.area;
+    document.getElementById('action-category').value = a.category;
+    document.getElementById('action-desc').value = a.desc;
+    document.getElementById('action-owner').value = a.owner;
+    document.getElementById('action-status').value = a.status;
+    document.getElementById('btn-save-action').innerHTML = '<i class="fa-solid fa-check"></i> Actualizar Acción';
+    document.getElementById('action-area').focus();
+};
 
 function renderActionsSummary() {
     const container = document.getElementById('actions-summary-list');
@@ -1503,3 +1598,358 @@ async function deleteAction(key) {
         }
     });
 }
+
+// ------------------------------------------
+// ANALISIS WIP
+// ------------------------------------------
+function initWipComparison() {
+    let wipOldData = null;
+    let wipNewData = null;
+
+    const processExcel = (file, callback) => {
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            try {
+                const data = new Uint8Array(ev.target.result);
+                const workbook = XLSX.read(data, { type: 'array' });
+                const firstSheet = workbook.SheetNames[0];
+                const rows = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheet]);
+                
+                const serialToAssy = {};
+                rows.forEach(row => {
+                    const getVal = (names) => {
+                        const key = Object.keys(row).find(k => names.some(n => k.toLowerCase().replace(/\s/g,'') === n.toLowerCase().replace(/\s/g,'')));
+                        return key ? row[key] : null;
+                    };
+                    const assembly = getVal(['AssemblyNumber', 'Assembly']) || 'Sin Assembly';
+                    const serial = getVal(['SerialNumber', 'Serial']);
+                    if (serial) {
+                        serialToAssy[serial.toString().trim()] = assembly;
+                    }
+                });
+                callback(serialToAssy);
+            } catch (err) {
+                console.error("Error procesando Excel", err);
+                alert("Error al procesar el archivo. Asegúrate de que tenga las columnas correctas.");
+                callback(null);
+            }
+        };
+        reader.readAsArrayBuffer(file);
+    };
+
+    const oldInput = document.getElementById('wip-old-input');
+    const newInput = document.getElementById('wip-new-input');
+    
+    if (oldInput) oldInput.onchange = (e) => {
+        const f = e.target.files[0];
+        if(!f) return;
+        document.getElementById('wip-old-status').textContent = `Cargando...`;
+        processExcel(f, (res) => {
+            wipOldData = res;
+            document.getElementById('wip-old-status').textContent = res ? `Listo (${Object.keys(res).length} seriales)` : 'Error';
+        });
+    };
+    if (newInput) newInput.onchange = (e) => {
+        const f = e.target.files[0];
+        if(!f) return;
+        document.getElementById('wip-new-status').textContent = `Cargando...`;
+        processExcel(f, (res) => {
+            wipNewData = res;
+            document.getElementById('wip-new-status').textContent = res ? `Listo (${Object.keys(res).length} seriales)` : 'Error';
+        });
+    };
+
+    const btnCompare = document.getElementById('btn-compare-wip');
+    if (btnCompare) btnCompare.onclick = () => {
+        if (!wipOldData || !wipNewData) {
+            alert("Por favor sube ambos archivos Excel para poder comparar.");
+            return;
+        }
+
+        const comparison = {}; // { assembly: { in: 0, out: 0 } }
+        let totalIn = 0;
+        let totalOut = 0;
+
+        // Salieron: están en OLD pero no en NEW
+        Object.keys(wipOldData).forEach(serial => {
+            if (!wipNewData[serial]) {
+                const assy = wipOldData[serial];
+                if (!comparison[assy]) comparison[assy] = { in: 0, out: 0 };
+                comparison[assy].out++;
+                totalOut++;
+            }
+        });
+
+        // Entraron: están en NEW pero no en OLD
+        Object.keys(wipNewData).forEach(serial => {
+            if (!wipOldData[serial]) {
+                const assy = wipNewData[serial];
+                if (!comparison[assy]) comparison[assy] = { in: 0, out: 0 };
+                comparison[assy].in++;
+                totalIn++;
+            }
+        });
+
+        const body = document.getElementById('wip-comp-body');
+        const sortedAssemblies = Object.keys(comparison).sort((a,b) => {
+            // Ordenar por mayor variación neta o movimiento total
+            const moveA = comparison[a].in + comparison[a].out;
+            const moveB = comparison[b].in + comparison[b].out;
+            return moveB - moveA;
+        });
+
+        body.innerHTML = sortedAssemblies.map(assy => {
+            const data = comparison[assy];
+            const net = data.in - data.out;
+            const netColor = net > 0 ? '#ef4444' : net < 0 ? '#22c55e' : '#888';
+            const netSign = net > 0 ? '+' : '';
+            return `<tr>
+                <td><strong>${assy}</strong></td>
+                <td style="color:#ef4444; font-weight:bold;">${data.in}</td>
+                <td style="color:#22c55e; font-weight:bold;">${data.out}</td>
+                <td style="color:${netColor}; font-weight:bold;">${netSign}${net}</td>
+            </tr>`;
+        }).join('');
+
+        if (sortedAssemblies.length === 0) {
+            body.innerHTML = '<tr><td colspan="4" style="text-align:center;">No hubo variaciones entre ambos reportes.</td></tr>';
+        }
+
+        document.getElementById('wip-comp-summary').innerHTML = `<span style="color:#ef4444;">Entraron: ${totalIn}</span> | <span style="color:#22c55e;">Salieron: ${totalOut}</span>`;
+        document.getElementById('wip-comparison-results').style.display = 'block';
+    };
+}
+
+// ------------------------------------------
+// TV MODE / KIOSK MODE (IDLE TIMEOUT)
+// ------------------------------------------
+let tvIdleTimer;
+let tvClockInterval;
+let tvEnterTime = 0;
+const TV_IDLE_MS = 3 * 60 * 1000; // 3 minutos
+
+let tvSlideTimer;
+let currentTvSlide = 0;
+const TV_SLIDES = 4; // 0: Leaderboard, 1: Paradas, 2: WIP, 3: Actions
+
+window.forceTVMode = function() {
+    enterTVMode();
+};
+
+function resetTVIdleTimer(e) {
+    if (e && e.type === 'mousemove' && document.getElementById('tv-mode-overlay').style.display === 'flex') {
+        if (Date.now() - tvEnterTime < 1500) return;
+    }
+
+    clearTimeout(tvIdleTimer);
+    if (document.getElementById('tv-mode-overlay').style.display === 'flex') {
+        exitTVMode();
+    }
+    tvIdleTimer = setTimeout(enterTVMode, TV_IDLE_MS);
+}
+
+function enterTVMode() {
+    const overlay = document.getElementById('tv-mode-overlay');
+    if (!overlay) return;
+    overlay.style.display = 'flex';
+    tvEnterTime = Date.now();
+    
+    // Iniciar reloj
+    clearInterval(tvClockInterval);
+    tvClockInterval = setInterval(() => {
+        document.getElementById('tv-time-display').textContent = new Date().toLocaleTimeString('es-DO');
+    }, 1000);
+
+    // Reiniciar y arrancar presentación
+    startTVSlides();
+}
+
+function exitTVMode() {
+    const overlay = document.getElementById('tv-mode-overlay');
+    if (overlay) overlay.style.display = 'none';
+    clearInterval(tvClockInterval);
+    clearInterval(tvSlideTimer);
+}
+
+function startTVSlides() {
+    clearInterval(tvSlideTimer);
+    currentTvSlide = 0;
+    updateTVSlideVisibility();
+    tvSlideTimer = setInterval(changeTVSlide, 7000);
+}
+
+function changeTVSlide() {
+    const currentEl = document.getElementById(`tv-slide-${currentTvSlide}`);
+    if (currentEl) {
+        currentEl.style.opacity = '0';
+        setTimeout(() => currentEl.style.display = 'none', 500);
+    }
+
+    currentTvSlide = (currentTvSlide + 1) % TV_SLIDES;
+    setTimeout(updateTVSlideVisibility, 500);
+}
+
+function updateTVSlideVisibility() {
+    for(let i=0; i<TV_SLIDES; i++){
+        const el = document.getElementById(`tv-slide-${i}`);
+        const dot = document.getElementById(`dot-${i}`);
+        if(el) {
+            if (i === currentTvSlide) {
+                el.style.display = 'flex';
+                setTimeout(() => el.style.opacity = '1', 50);
+            } else {
+                el.style.display = 'none';
+                el.style.opacity = '0';
+            }
+        }
+        if(dot) dot.style.background = i === currentTvSlide ? '#8b5cf6' : 'rgba(255,255,255,0.2)';
+    }
+
+    const titleEl = document.getElementById('tv-slide-title');
+    if (currentTvSlide === 0) {
+        titleEl.textContent = 'Productividad en Vivo';
+        renderTVLeaderboard();
+    } else if (currentTvSlide === 1) {
+        titleEl.textContent = 'Paradas Activas';
+        renderTVParadas();
+    } else if (currentTvSlide === 2) {
+        titleEl.textContent = 'Top WIP Detractores';
+        renderTVWip();
+    } else if (currentTvSlide === 3) {
+        titleEl.textContent = 'Acciones Pendientes 4Q';
+        renderTVActions();
+    }
+}
+
+function renderTVLeaderboard() {
+    const day = getLocalDayStr();
+    const stats = [];
+    appTechnicians.forEach(t => {
+        let count = 0;
+        if (productivityData[day] && productivityData[day][t.id]) {
+            Object.values(productivityData[day][t.id]).forEach(items => {
+                count += Array.isArray(items) ? items.length : 0;
+            });
+        }
+        stats.push({ id: t.id, name: t.name, count: count });
+    });
+
+    stats.sort((a,b) => b.count - a.count);
+    const maxCount = stats.length > 0 ? Math.max(stats[0].count, 1) : 1;
+    const container = document.getElementById('tv-leaderboard');
+    if (!container) return;
+
+    container.innerHTML = stats.slice(0, 8).map((s, idx) => {
+        let icon = '';
+        if (idx === 0 && s.count > 0) icon = '🔥 👑';
+        else if (idx === stats.length - 1 && stats.length > 1 && s.count < stats[0].count) icon = '🦌';
+
+        const barWidth = Math.max((s.count / maxCount) * 100, 5);
+        const isLast = (idx === stats.length - 1 && stats.length > 1);
+        const color = idx === 0 ? 'linear-gradient(90deg, #f59e0b, #ef4444)' : 
+                      isLast ? 'linear-gradient(90deg, #64748b, #475569)' :
+                      'linear-gradient(90deg, #3b82f6, #8b5cf6)';
+
+        return `
+            <div style="display:flex; align-items:center; width:100%; margin-bottom:10px;">
+                <div style="width:50px; font-size:2rem; font-weight:900; color:var(--text-muted); text-align:center;">${idx + 1}</div>
+                <div style="flex:1; background:rgba(255,255,255,0.05); border-radius:30px; position:relative; height:50px; overflow:hidden; border: 1px solid rgba(255,255,255,0.1);">
+                    <div style="width:${barWidth}%; height:100%; background:${color}; transition:width 1s cubic-bezier(0.4, 0, 0.2, 1); display:flex; align-items:center; padding:0 25px;">
+                        <span style="color:#fff; font-weight:800; font-size:1.5rem; white-space:nowrap; text-shadow: 1px 1px 3px rgba(0,0,0,0.5);">${s.name}</span>
+                    </div>
+                </div>
+                <div style="width:140px; text-align:right; font-size:2.5rem; font-weight:900; color:#fff; display:flex; justify-content:flex-end; align-items:center; gap:15px;">
+                    ${s.count} <span style="font-size:2rem;">${icon}</span>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function renderTVParadas() {
+    const day = getLocalDayStr();
+    const dayData = downtimeData[day] || {};
+    const paradasActivas = [];
+    
+    Object.keys(dayData).forEach(hourKey => {
+        Object.keys(dayData[hourKey]).forEach(pushKey => {
+            const entry = dayData[hourKey][pushKey];
+            if (entry.status === 'Abierta') {
+                const tech = appTechnicians.find(t => t.id === entry.techId);
+                paradasActivas.push({ ...entry, techName: tech ? tech.name : entry.techId });
+            }
+        });
+    });
+
+    const container = document.getElementById('tv-paradas-content');
+    if (!container) return;
+    if (paradasActivas.length === 0) {
+        container.innerHTML = '<div style="grid-column:1/-1; text-align:center; color:rgba(255,255,255,0.5); font-size:2rem; padding:50px;">Ninguna parada activa ✅</div>';
+        return;
+    }
+
+    container.innerHTML = paradasActivas.map(p => `
+        <div style="background:rgba(239,68,68,0.1); border:2px solid #ef4444; border-radius:20px; padding:25px; text-align:center; box-shadow: 0 0 20px rgba(239,68,68,0.2);">
+            <h3 style="color:#fff; font-size:2rem; margin:0 0 10px 0;">${p.techName}</h3>
+            <p style="color:#ef4444; font-weight:bold; font-size:1.5rem; margin:0 0 10px 0;">${p.cause}</p>
+            <p style="color:rgba(255,255,255,0.7); font-size:1.2rem; margin:0;">Desde: ${p.startTime || '--:--'}</p>
+        </div>
+    `).join('');
+}
+
+function renderTVWip() {
+    const container = document.getElementById('tv-wip-content');
+    if (!container) return;
+    if (!wipData || Object.keys(wipData).length === 0) {
+        container.innerHTML = '<div style="text-align:center; color:rgba(255,255,255,0.5); font-size:2rem; padding:50px;">Sin datos de WIP actuales</div>';
+        return;
+    }
+
+    const items = Object.keys(wipData).map(k => ({ assembly: k, qty: wipData[k] })).sort((a,b) => b.qty - a.qty).slice(0, 6);
+    const maxQty = items.length > 0 ? items[0].qty : 1;
+
+    container.innerHTML = items.map(item => {
+        const w = Math.max((item.qty / maxQty) * 100, 5);
+        return `
+            <div style="display:flex; align-items:center; width:100%; margin-bottom:15px;">
+                <div style="width:250px; font-size:1.5rem; font-weight:bold; color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${item.assembly}</div>
+                <div style="flex:1; background:rgba(255,255,255,0.05); border-radius:30px; position:relative; height:45px; overflow:hidden; border: 1px solid rgba(255,255,255,0.1);">
+                    <div style="width:${w}%; height:100%; background:linear-gradient(90deg, #f59e0b, #ef4444); display:flex; align-items:center;"></div>
+                </div>
+                <div style="width:100px; text-align:right; font-size:2rem; font-weight:900; color:#ef4444;">${item.qty}</div>
+            </div>
+        `;
+    }).join('');
+}
+
+function renderTVActions() {
+    const container = document.getElementById('tv-acciones-content');
+    if (!container) return;
+    const active = (engineerActions || []).filter(a => a.status !== 'Cerrado').sort((a,b) => b.timestamp - a.timestamp).slice(0, 4);
+
+    if (active.length === 0) {
+        container.innerHTML = '<div style="grid-column:1/-1; text-align:center; color:rgba(255,255,255,0.5); font-size:2rem; padding:50px;">Ninguna acción pendiente 🎉</div>';
+        return;
+    }
+
+    container.innerHTML = active.map(a => `
+        <div style="background:rgba(255,255,255,0.05); border-left:6px solid ${a.status === 'Abierto' ? '#ef4444' : '#f59e0b'}; border-radius:15px; padding:25px; box-shadow: 0 5px 15px rgba(0,0,0,0.3);">
+            <div style="display:flex; justify-content:space-between; margin-bottom:15px;">
+                <span style="font-size:1.5rem; font-weight:bold; color:#fff;">${a.area}</span>
+                <span style="color:${a.status === 'Abierto' ? '#ef4444' : '#f59e0b'}; font-weight:bold; font-size:1.2rem;">${a.status.toUpperCase()}</span>
+            </div>
+            <p style="color:rgba(255,255,255,0.8); font-size:1.2rem; margin-bottom:15px; line-height:1.4;">${a.desc}</p>
+            <div style="text-align:right; font-size:1.2rem; color:#a78bfa; font-weight:bold;">Resp: ${a.owner}</div>
+        </div>
+    `).join('');
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    ['mousemove', 'mousedown', 'keypress', 'touchstart'].forEach(evt => {
+        window.addEventListener(evt, resetTVIdleTimer);
+    });
+    document.getElementById('tv-mode-overlay')?.addEventListener('click', () => {
+        resetTVIdleTimer();
+    });
+    resetTVIdleTimer();
+});
